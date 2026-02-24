@@ -1,0 +1,193 @@
+services:
+  # Zookeeper - Required for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: hack-notification-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: hack-notification-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kafka UI for development
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: hack-notification-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    ports:
+      - "8090:8080"
+    restart: unless-stopped
+
+  # Initialize Kafka topics
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: hack-notification-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: |
+      bash -c '
+        echo "Creating Kafka topics..."
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --replication-factor 1 --partitions 3 --topic video.failed.v1
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --replication-factor 1 --partitions 1 --topic video.failed.v1.dlq
+        echo "Topics created successfully"
+        kafka-topics --list --bootstrap-server kafka:29092
+      '
+    restart: "no"
+
+  # Notification Service Application
+  notification-service:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: hack-notification-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      # Spring configuration
+      SPRING_PROFILES_ACTIVE: docker
+
+      # Kafka configuration
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_GROUP_ID: notification-service
+
+      # Topic configuration
+      TOPIC_VIDEO_FAILED: video.failed.v1
+      TOPIC_VIDEO_FAILED_DLQ: video.failed.v1.dlq
+
+      # Retry configuration
+      NOTIF_RETRY_MAX_ATTEMPTS: 3
+      NOTIF_RETRY_BACKOFF_MS: 1000
+
+      # Logging configuration
+      LOGGING_LEVEL_COM_FIAP_HACKNOTIFICATION: INFO
+      LOGGING_LEVEL_ORG_APACHE_KAFKA: WARN
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_KAFKA: INFO
+
+      # JVM options
+      JAVA_OPTS: >-
+        -XX:+UseContainerSupport
+        -XX:MaxRAMPercentage=75.0
+        -XX:+UseG1GC
+        -Djava.security.egd=file:/dev/./urandom
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Log aggregator (optional)
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.13.0
+    container_name: hack-notification-logstash
+    profiles:
+      - monitoring
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+      - ./logs:/app/logs:ro
+    ports:
+      - "5044:5044"
+      - "5000:5000/tcp"
+      - "5000:5000/udp"
+      - "9600:9600"
+    environment:
+      LS_JAVA_OPTS: "-Xmx256m -Xms256m"
+    restart: unless-stopped
+
+  # Kafka message producer for testing
+  test-producer:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: hack-notification-test-producer
+    profiles:
+      - testing
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: |
+      bash -c '
+        echo "Waiting for topics to be ready..."
+        sleep 10
+
+        echo "Sending test messages..."
+
+        # Valid message
+        echo "{\"eventName\":\"VideoFailed.v1\",\"eventId\":\"550e8400-e29b-41d4-a716-446655440000\",\"occurredAt\":\"2024-02-23T10:30:00.000Z\",\"correlationId\":\"test-valid-123\",\"payload\":{\"videoId\":\"123e4567-e89b-12d3-a456-426614174000\",\"reason\":\"ENCODING_FAILED\",\"details\":\"Test encoding failure\"}}" | kafka-console-producer --bootstrap-server kafka:29092 --topic video.failed.v1
+
+        # Invalid event name (will go to DLQ)
+        echo "{\"eventName\":\"VideoFailed.v2\",\"eventId\":\"550e8400-e29b-41d4-a716-446655440001\",\"occurredAt\":\"2024-02-23T10:30:00.000Z\",\"correlationId\":\"test-invalid-123\",\"payload\":{\"videoId\":\"123e4567-e89b-12d3-a456-426614174000\",\"reason\":\"ENCODING_FAILED\"}}" | kafka-console-producer --bootstrap-server kafka:29092 --topic video.failed.v1
+
+        # Invalid payload (will go to DLQ)
+        echo "{\"eventName\":\"VideoFailed.v1\",\"eventId\":\"550e8400-e29b-41d4-a716-446655440002\",\"occurredAt\":\"2024-02-23T10:30:00.000Z\",\"correlationId\":\"test-invalid-payload-123\",\"payload\":{\"videoId\":\"invalid-uuid\",\"reason\":\"\"}}" | kafka-console-producer --bootstrap-server kafka:29092 --topic video.failed.v1
+
+        echo "Test messages sent successfully"
+      '
+    restart: "no"
+
+volumes:
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  kafka-data:
+    driver: local
+
+networks:
+  default:
+    name: hack-notification-network
+    driver: bridge

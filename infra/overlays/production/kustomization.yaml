@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Referencia o base (infra/)
+resources:
+- ../../
+- network-policy.yaml
+
+# Namespace de produção
+namespace: notification-prod
+
+# Labels adicionais para identificar o ambiente
+commonLabels:
+  environment: production
+
+# Réplicas de produção (alta disponibilidade)
+replicas:
+- name: hack-notification-service
+  count: 3
+
+# Tag da imagem de produção (sempre versão semântica específica — nunca latest)
+images:
+- name: hack-notification-service
+  newName: registry.internal/fiap/hack-notification-service
+  newTag: "1.0.0"
+
+# Patches de configuração específicos de produção
+patches:
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: hack-notification-config
+- path: deployment-resources-patch.yaml
+  target:
+    kind: Deployment
+    name: hack-notification-service
+
+# ConfigMap de produção
+configMapGenerator:
+- name: hack-notification-env-config
+  behavior: merge
+  literals:
+  - SPRING_PROFILES_ACTIVE=production
+  - LOGGING_LEVEL_COM_FIAP_HACKNOTIFICATION=WARN
+  - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,metrics,prometheus
+
+# Secret generator — valores reais fornecidos via CI/CD (ex: Vault, Sealed Secrets)
+# secretGenerator:
+# - name: hack-notification-kafka-credentials
+#   envs:
+#   - secrets.env   # Arquivo NÃO versionado — gerado pelo pipeline

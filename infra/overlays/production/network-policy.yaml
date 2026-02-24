@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hack-notification-network-policy
+  namespace: notification-prod
+  labels:
+    app: hack-notification-service
+    environment: production
+spec:
+  podSelector:
+    matchLabels:
+      app: hack-notification-service
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Permite scrape do Prometheus (namespace monitoring)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # Permite conexão ao Kafka (namespace kafka)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+
+  # Permite resolução DNS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

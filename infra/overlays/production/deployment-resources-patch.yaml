@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hack-notification-service
+  namespace: notification-prod
+spec:
+  # Rolling update conservador para produção
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    spec:
+      # Termination grace period maior para produção (garantir commit de offsets)
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: notification-service
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
