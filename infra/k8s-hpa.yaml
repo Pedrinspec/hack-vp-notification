@@ -1,0 +1,79 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hack-notification-service-hpa
+  namespace: default
+  labels:
+    app: hack-notification-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hack-notification-service
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+  # CPU-based scaling
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+  # Memory-based scaling
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+  # Kafka lag-based scaling (if using custom metrics)
+  # - type: External
+  #   external:
+  #     metric:
+  #       name: kafka_consumer_lag
+  #       selector:
+  #         matchLabels:
+  #           topic: "video.failed.v1"
+  #           consumer_group: "notification-service"
+  #     target:
+  #       type: AverageValue
+  #       averageValue: "1000"
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      selectPolicy: Min
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hack-notification-service-pdb
+  namespace: default
+  labels:
+    app: hack-notification-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: hack-notification-service

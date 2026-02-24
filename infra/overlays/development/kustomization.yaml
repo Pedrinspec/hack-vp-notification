@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Referencia o base (infra/)
+resources:
+- ../../
+
+# Namespace específico para desenvolvimento
+namespace: notification-dev
+
+# Labels adicionais para identificar o ambiente
+commonLabels:
+  environment: development
+
+# Réplicas reduzidas para dev (economizar recursos)
+replicas:
+- name: hack-notification-service
+  count: 1
+
+# Tag da imagem para desenvolvimento
+images:
+- name: hack-notification-service
+  newTag: dev-latest
+
+# Patches de configuração específicos do ambiente
+patches:
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: hack-notification-config
+
+# Gerador de ConfigMap com variáveis de dev
+configMapGenerator:
+- name: hack-notification-env-config
+  behavior: merge
+  literals:
+  - SPRING_PROFILES_ACTIVE=development
+  - LOGGING_LEVEL_COM_FIAP_HACKNOTIFICATION=DEBUG
+  - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_KAFKA=DEBUG
+  - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,metrics,prometheus,env,configprops

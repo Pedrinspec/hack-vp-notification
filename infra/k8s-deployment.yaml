@@ -1,0 +1,226 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hack-notification-service
+  namespace: default
+  labels:
+    app: hack-notification-service
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hack-notification-service
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: hack-notification-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      serviceAccountName: hack-notification-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: notification-service
+        image: hack-notification-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        # Configuration from ConfigMap
+        - name: SPRING_PROFILES_ACTIVE
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: spring.profiles.active
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: kafka.bootstrap-servers
+        - name: KAFKA_GROUP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: kafka.group-id
+        - name: TOPIC_VIDEO_FAILED
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: topic.video-failed
+        - name: TOPIC_VIDEO_FAILED_DLQ
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: topic.video-failed-dlq
+        - name: NOTIF_RETRY_MAX_ATTEMPTS
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: notification.retry.max-attempts
+        - name: NOTIF_RETRY_BACKOFF_MS
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: notification.retry.backoff-ms
+        - name: LOGGING_LEVEL_COM_FIAP_HACKNOTIFICATION
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: logging.level.com.fiap.hacknotification
+        - name: JAVA_OPTS
+          valueFrom:
+            configMapKeyRef:
+              name: hack-notification-config
+              key: java.opts
+
+        # Secrets (uncomment if needed)
+        # - name: KAFKA_USERNAME
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: hack-notification-secrets
+        #       key: kafka-username
+        # - name: KAFKA_PASSWORD
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: hack-notification-secrets
+        #       key: kafka-password
+
+        # Pod metadata
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        startupProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: logs-volume
+          mountPath: /app/logs
+
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: logs-volume
+        emptyDir: {}
+
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+      # Pod disruption budget and affinity
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - hack-notification-service
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hack-notification-service
+  namespace: default
+  labels:
+    app: hack-notification-service
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hack-notification-service
+  namespace: default
+  labels:
+    app: hack-notification-service
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hack-notification-service
+  namespace: default
+  labels:
+    app: hack-notification-service
+subjects:
+- kind: ServiceAccount
+  name: hack-notification-service
+  namespace: default
+roleRef:
+  kind: Role
+  name: hack-notification-service
+  apiGroup: rbac.authorization.k8s.io

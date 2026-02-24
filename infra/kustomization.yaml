@@ -1,0 +1,62 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: hack-notification-service
+  namespace: default
+
+# Common labels applied to all resources
+commonLabels:
+  app: hack-notification-service
+  project: fiap-hack-vp
+  managed-by: kustomize
+
+# Resource files to include
+resources:
+- k8s-configmap.yaml
+- k8s-secrets.yaml
+- k8s-deployment.yaml
+- k8s-service.yaml
+- k8s-hpa.yaml
+
+# Images to be replaced (useful for CI/CD)
+images:
+- name: hack-notification-service
+  newTag: latest
+
+# ConfigMap generators (alternative to static files)
+configMapGenerator:
+- name: hack-notification-env-config
+  literals:
+  - SPRING_PROFILES_ACTIVE=kubernetes
+  - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,metrics,prometheus
+
+# Secret generators (for runtime secrets)
+secretGenerator:
+- name: hack-notification-runtime-secrets
+  literals:
+  - RUNTIME_TOKEN=changeme
+  type: Opaque
+
+# Namespace configuration
+namespace: default
+
+# Patches for different environments
+patchesStrategicMerge:
+# - patches/development.yaml
+# - patches/staging.yaml
+# - patches/production.yaml
+
+# JSON patches for specific modifications
+# patchesJson6902:
+# - target:
+#     group: apps
+#     version: v1
+#     kind: Deployment
+#     name: hack-notification-service
+#   path: patches/deployment-resources.yaml
+
+# Replicas configuration (can be overridden per environment)
+replicas:
+- name: hack-notification-service
+  count: 2

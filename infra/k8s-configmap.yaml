@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hack-notification-config
+  namespace: default
+  labels:
+    app: hack-notification-service
+    component: configuration
+data:
+  # Spring configuration
+  spring.profiles.active: "kubernetes"
+
+  # Kafka configuration
+  kafka.bootstrap-servers: "kafka-service:9092"
+  kafka.group-id: "notification-service"
+
+  # Topic configuration
+  topic.video-failed: "video.failed.v1"
+  topic.video-failed-dlq: "video.failed.v1.dlq"
+
+  # Retry configuration
+  notification.retry.max-attempts: "3"
+  notification.retry.backoff-ms: "1000"
+
+  # Logging configuration
+  logging.level.com.fiap.hacknotification: "INFO"
+  logging.level.org.apache.kafka: "WARN"
+  logging.level.org.springframework.kafka: "INFO"
+
+  # JVM configuration
+  java.opts: >-
+    -XX:+UseContainerSupport
+    -XX:MaxRAMPercentage=75.0
+    -XX:+UseG1GC
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/tmp/heapdump.hprof
+    -Djava.security.egd=file:/dev/./urandom
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hack-notification-logstash-config
+  namespace: default
+  labels:
+    app: hack-notification-service
+    component: logging
+data:
+  logstash.conf: |
+    input {
+      file {
+        path => "/app/logs/*.log"
+        start_position => "beginning"
+        sincedb_path => "/dev/null"
+        codec => json
+      }
+    }
+
+    filter {
+      if [level] {
+        mutate {
+          lowercase => [ "level" ]
+        }
+      }
+
+      # Extract correlation ID if present
+      if [message] =~ /correlationId=([^\s]+)/ {
+        grok {
+          match => { "message" => "correlationId=(?<correlation_id>[^\s]+)" }
+        }
+      }
+
+      # Parse timestamps
+      date {
+        match => [ "timestamp", "ISO8601" ]
+        target => "@timestamp"
+      }
+
+      # Add metadata
+      mutate {
+        add_field => {
+          "service" => "hack-notification-service"
+          "environment" => "kubernetes"
+        }
+      }
+    }
+
+    output {
+      elasticsearch {
+        hosts => ["${ELASTICSEARCH_HOSTS:elasticsearch:9200}"]
+        index => "hack-notification-logs-%{+YYYY.MM.dd}"
+      }
+
+      stdout {
+        codec => rubydebug
+      }
+    }
