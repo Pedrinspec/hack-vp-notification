@@ -51,58 +51,111 @@ cd hack-vp-notification
 
 ### 2. Execução Local (Docker Compose)
 
+A stack é dividida em dois arquivos dentro de `infra/`:
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `docker-compose-infra.yml` | Kafka (KRaft) + rede `vp-network` |
+| `docker-compose.yml` | Aplicação Spring Boot |
+
+> **Importante:** a ordem abaixo deve ser respeitada. O `docker-compose.yml` depende da rede `vp-network` e do broker Kafka criados pelo `docker-compose-infra.yml`.
+
 ```bash
-# Subir toda a infraestrutura (Kafka + Aplicação)
 cd infra
-docker-compose up -d
 
-# Verificar logs
-docker-compose logs -f notification-service
+# Passo 1 — copiar e ajustar variáveis de ambiente
+cp .env.example .env
+# Edite .env se necessário. Valor crítico:
+#   KAFKA_BOOTSTRAP_SERVERS=kafka:9092   ← porta correta do broker
 
-# Parar os serviços
-docker-compose down
+# Passo 2 — subir infraestrutura (Kafka + rede vp-network)
+docker compose -f docker-compose-infra.yml up -d
+
+# Aguardar Kafka ficar healthy (pode levar ~30s)
+docker compose -f docker-compose-infra.yml ps
+
+# Passo 3 — subir a aplicação
+docker compose --env-file .env up -d
+
+# Acompanhar logs
+docker logs -f hack-vp-notification-app
+
+# Parar tudo
+docker compose down
+docker compose -f docker-compose-infra.yml down
 ```
 
-### 3. Teste da Aplicação
+### 3. Testes com Docker Compose
+
+#### 3.1 Health Check
+
+Confirma que o serviço subiu e está conectado ao Kafka:
 
 ```bash
-# Enviar mensagem de teste válida
-docker-compose --profile testing up test-producer
-
-# Verificar logs de processamento
-docker-compose logs notification-service
-
-# Acessar Kafka UI
-open http://localhost:8090
+curl http://localhost:8080/actuator/health
+# Esperado: {"status":"UP"}
 ```
 
-## 🧪 Testes
+#### 3.2 Teste Funcional — Produzir mensagem válida
+
+Envia um evento `VideoFailed` para o tópico principal e verifica o processamento nos logs:
+
+```bash
+# Abrir um producer interativo dentro do container Kafka
+docker exec -it vp-kafka \
+  /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic video.failed.v1
+```
+
+Cole a mensagem abaixo e pressione **Enter**:
+
+```json
+{"eventName":"VideoFailed.v1","eventId":"550e8400-e29b-41d4-a716-446655440000","occurredAt":"2024-02-23T10:30:00.000Z","correlationId":"test-123","payload":{"videoId":"123e4567-e89b-12d3-a456-426614174000","reason":"ENCODING_FAILED","details":"Test failure"}}
+```
+
+Verifique o processamento nos logs da aplicação:
+
+```bash
+docker logs -f hack-vp-notification-app
+# Esperado: log INFO com correlationId=test-123 e videoId=123e4567
+```
+
+#### 3.3 Teste de Erro — Verificar DLQ
+
+Envia uma mensagem inválida para forçar retries e queda na Dead Letter Queue:
+
+```bash
+# Enviar payload inválido
+docker exec -it vp-kafka \
+  /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic video.failed.v1
+```
+
+Cole qualquer texto inválido e pressione **Enter**:
+
+```
+mensagem-invalida-nao-json
+```
+
+Após os retries (padrão: 3 tentativas com 1s de backoff), consuma a DLQ:
+
+```bash
+docker exec -it vp-kafka \
+  /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic video.failed.v1.dlq \
+  --from-beginning
+# Esperado: a mensagem inválida aparece aqui
+```
+
+## 🧪 Testes Automatizados
 
 ### Executar Testes Unitários
 
 ```bash
 ./mvnw test
-```
-
-### Teste de Integração com Kafka
-
-```bash
-# Subir apenas Kafka
-docker-compose up -d kafka
-
-# Executar testes de integração
-./mvnw test -Dtest=*IntegrationTest
-```
-
-### Teste Manual com Kafka
-
-```bash
-# Producer de teste
-echo '{"eventName":"VideoFailed.v1","eventId":"550e8400-e29b-41d4-a716-446655440000","occurredAt":"2024-02-23T10:30:00.000Z","correlationId":"test-123","payload":{"videoId":"123e4567-e89b-12d3-a456-426614174000","reason":"ENCODING_FAILED","details":"Test failure"}}' | \
-kafka-console-producer --bootstrap-server localhost:9092 --topic video.failed.v1
-
-# Consumer DLQ (para mensagens com erro)
-kafka-console-consumer --bootstrap-server localhost:9092 --topic video.failed.v1.dlq --from-beginning
 ```
 
 ## 📦 Deploy em Produção
