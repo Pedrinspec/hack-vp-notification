@@ -1,74 +1,50 @@
-# Multi-stage build for Spring Boot application
-FROM maven:3.9.8-amazoncorretto-21-alpine AS builder
+# =============================================================================
+# hack-vp-notification — Dockerfile
+# Spring Boot 4 + Java 21 + Kafka consumer (retry + DLQ)
+# Multi-stage build: build → runtime
+# =============================================================================
 
-# Set working directory
+# Stage 1: Build
+FROM eclipse-temurin:21-jdk-alpine AS builder
+
+WORKDIR /build
+
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+
+RUN chmod +x ./mvnw \
+    && ./mvnw dependency:go-offline -B --no-transfer-progress
+
+COPY src/ ./src/
+
+RUN ./mvnw package -DskipTests -B --no-transfer-progress
+
+# Stage 2: Runtime
+FROM eclipse-temurin:21-jre-alpine AS runtime
+
+LABEL maintainer="FIAP Hackathon"
+LABEL app="hack-vp-notification"
+LABEL version="0.0.1-SNAPSHOT"
+LABEL description="Serviço de notificação — Kafka consumer com retry e DLQ"
+
+RUN apk add --no-cache dumb-init
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 WORKDIR /app
 
-# Copy Maven configuration files
-COPY pom.xml .
-COPY .mvn .mvn
-COPY mvnw .
+COPY --from=builder /build/target/*.jar app.jar
 
-# Download dependencies (better caching)
-RUN ./mvnw dependency:go-offline -B
+RUN chown -R appuser:appgroup /app
 
-# Copy source code
-COPY src src
+USER appuser
 
-# Build the application
-RUN ./mvnw package -DskipTests -B
+EXPOSE 8080
 
-# Runtime stage
-FROM amazoncorretto:21-alpine3.19-jre
-
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init=1.2.5-r2
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S spring && \
-    adduser -u 1001 -S spring -G spring
-
-# Set working directory
-WORKDIR /app
-
-# Copy the built JAR from builder stage
-COPY --from=builder /app/target/*.jar app.jar
-
-# Change ownership to spring user
-RUN chown -R spring:spring /app
-
-# Switch to non-root user
-USER spring:spring
-
-# Health check via actuator endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1
 
-# Expose port (for potential management endpoints)
-EXPOSE 8080
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Djava.security.egd=file:/dev/./urandom"
 
-# Set JVM options for containerized environment
-ENV JAVA_OPTS="-XX:+UseContainerSupport \
-               -XX:MaxRAMPercentage=75.0 \
-               -XX:+UseG1GC \
-               -XX:+HeapDumpOnOutOfMemoryError \
-               -XX:HeapDumpPath=/tmp/heapdump.hprof \
-               -Djava.security.egd=file:/dev/./urandom"
-
-# Application configuration
-ENV SPRING_PROFILES_ACTIVE=docker
-
-# Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
-
-# Start the application
-CMD ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
-
-# Labels for metadata
-LABEL maintainer="FIAP Team"
-LABEL version="0.0.1-SNAPSHOT"
-LABEL description="Hack VP Notification Service - Kafka Consumer for Video Failed Events"
-LABEL org.opencontainers.image.source="https://github.com/fiap/hack-vp-notification"
-LABEL org.opencontainers.image.title="hack-vp-notification"
-LABEL org.opencontainers.image.description="Spring Boot microservice for processing video failure notifications via Kafka"
-LABEL org.opencontainers.image.vendor="FIAP"
+CMD ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
