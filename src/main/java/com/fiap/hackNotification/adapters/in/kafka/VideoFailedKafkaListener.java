@@ -27,28 +27,23 @@ public class VideoFailedKafkaListener {
 
     @KafkaListener(topics = "${notification.topics.videoFailed}")
     public void onMessage(ConsumerRecord<String, String> record, Acknowledgment ack) throws Exception {
-        // parse JSON
         EventEnvelope<VideoFailedPayload> event =
                 objectMapper.readValue(
                         record.value(),
                         objectMapper.getTypeFactory().constructParametricType(EventEnvelope.class, VideoFailedPayload.class)
                 );
 
-        // validate
         Set<ConstraintViolation<EventEnvelope<VideoFailedPayload>>> violations = validator.validate(event);
         if (!violations.isEmpty()) {
-            // inválido: lança exceção para cair no error handler -> DLQ
             throw new IllegalArgumentException("Invalid event envelope: " + violations);
         }
 
-        // guarantee correct eventName
         if (!"VideoFailed.v1".equals(event.eventName())) {
             throw new IllegalArgumentException("Unexpected eventName=" + event.eventName());
         }
 
         useCase.handle(event);
 
-        // commit offset manually
         ack.acknowledge();
     }
 }
