@@ -45,15 +45,10 @@ public class KafkaErrorHandlingConfig {
                 (record, ex) -> new TopicPartition(dlqTopic, record.partition())
         );
 
-        // FixedBackOff: interval + maxRetries
-        // Observação: maxAttempts inclui a 1ª tentativa? aqui tratamos como tentativas adicionais:
         long maxRetries = Math.max(0, maxAttempts - 1);
         var backOff = new FixedBackOff(backoffMs, maxRetries);
 
         var handler = new DefaultErrorHandler(recoverer, backOff);
-
-        // Se quiser: não retry para erros “não-transitórios”
-        // handler.addNotRetryableExceptions(IllegalArgumentException.class);
 
         return handler;
     }
