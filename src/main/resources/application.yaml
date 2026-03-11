@@ -17,6 +17,11 @@ spring:
     listener:
       ack-mode: manual
       missing-topics-fatal: false
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
 
 notification:
   topics:
@@ -27,3 +32,5 @@ notification:
     max-attempts: ${NOTIF_RETRY_MAX_ATTEMPTS:3}
     backoff-ms: ${NOTIF_RETRY_BACKOFF_MS:1000}
 
+  email:
+    from: ${NOTIF_EMAIL_FROM:no-reply@hack.local}
