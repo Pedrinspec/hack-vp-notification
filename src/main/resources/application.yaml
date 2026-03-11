@@ -23,6 +23,11 @@ spring:
     username: ${MAIL_USERNAME:}
     password: ${MAIL_PASSWORD:}
 
+management:
+  health:
+    kafka:
+      enabled: false
+
 notification:
   topics:
     videoFailed: ${TOPIC_VIDEO_FAILED:video.failed.v1}
