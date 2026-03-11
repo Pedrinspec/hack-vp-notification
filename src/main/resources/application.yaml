@@ -27,6 +27,8 @@ management:
   health:
     kafka:
       enabled: false
+    mail:
+      enabled: false
 
 notification:
   topics:
